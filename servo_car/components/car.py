@@ -1,7 +1,8 @@
 from time import sleep_ms
 
+from servo_car.components.display import Display
 from servo_car.components.drive_train import DriveTrain
-from servo_car.components.light import Lights
+from servo_car.components.light import CarLights
 from servo_car.components.shift_selector import ShiftSelector
 from servo_car.components.uart import UARTController
 from servo_car.components.horn import Horn
@@ -22,24 +23,28 @@ class Car:
         selector: ShiftSelector,
         uart: UARTController,
         horn: Horn,
-        headlights: Lights,
+        car_lights: CarLights,
+        display: Display,
     ):
         self._drivetrain = drivetrain
         self._selector = selector
         self._uart = uart
         self._horn = horn
-        self._headlights = headlights
+        self._lights = car_lights
+        self._display = display
         self._prev_action = None
 
     def loop(self):
         """
         Start the main control loop. Blocks indefinetely.
 
-        Each iteration of the loop peforms three steps in order:
+        Each iteration of the loop peforms five steps in order:
 
         1. Reads and dispatch UART command (if one is available)
         2. Poll the drivetrain to advance the speed ramp one tick
-        3. Sleep 10ms to yield CPU time and reduce busy-wait overhead.
+        3. Poll the lights to advance one tick
+        4. Update the display
+        5. Sleep 10ms to yield CPU time and reduce busy-wait overhead.
 
         The 10ms sleep combined with the drivetrain's 30ms update interval 
         means the ramp advances on roughly every third loop iteration
@@ -48,6 +53,11 @@ class Car:
         while True:
             self._handle_command(self._uart.read_command())
             self._drivetrain.update()
+            self._lights.update()
+            self._display.update(
+                gear=self._selector.gears.index(self._selector.current) + 1,
+                speed=self._selector.speed,
+            )
             sleep_ms(10)
 
     def foward(self):
@@ -57,6 +67,7 @@ class Car:
         speed = self._selector.speed
         self._drivetrain.resync()
         self._drivetrain.set_targets(speed, speed)
+        self._lights.forward()
 
     def backward(self):
         """
@@ -65,6 +76,7 @@ class Car:
         speed = self._selector.speed
         self._drivetrain.resync()
         self._drivetrain.set_targets(-speed, -speed)
+        self._lights.reverse()
 
     def stop(self):
         """
@@ -75,6 +87,7 @@ class Car:
             left=0,
             right=0,
         )
+        self._lights.stop()
 
     def soft_left(self):
         """
@@ -83,12 +96,12 @@ class Car:
         half speed, producing a gradual leftward curve rather than a sharp 
         pivot
         """
-        self._headlights.turn_left()
         speed = self._selector.speed
         self._drivetrain.set_targets(
             left=speed // 2,
             right=speed,
         )
+        self._lights.indicate_left()
 
     def soft_right(self):
         """
@@ -97,12 +110,12 @@ class Car:
         half speed, producing a gradual rightward curve rather than a sharp 
         pivot
         """
-        self._headlights.turn_right()
         speed = self._selector.speed
         self._drivetrain.set_targets(
             left=speed,
             right=speed // 2,
         )
+        self._lights.indicate_right()
 
     def sharp_left(self):
         """
@@ -114,6 +127,7 @@ class Car:
             left=-speed,
             right=speed,
         )
+        self._lights.party()
 
     def sharp_right(self):
         """
@@ -125,6 +139,7 @@ class Car:
             left=speed,
             right=-speed,
         )
+        self._lights.party()
 
     def shift_up(self):
         """
@@ -148,9 +163,6 @@ class Car:
         except ValueError:
             pass
 
-    def toggle_lights(self):
-        self._headlights.toggle()
-
     def _handle_command(self, command: str | None):
         """
         Dispatch a decoded UART command to the appropiate subsytem action.
@@ -173,7 +185,6 @@ class Car:
             "f": self._horn.honk,
             "j": self.shift_down,
             "k": self.shift_up,
-            "g": self.toggle_lights,
         }
 
         action = actions.get(command, None)

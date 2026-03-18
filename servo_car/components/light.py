@@ -1,66 +1,113 @@
-from time import sleep_ms
+from time import ticks_ms, ticks_diff
 from machine import Pin
 
 
 class Light:
     """
-    Controls a LED light via a single GPIO Pin.
+    A single non-blocking LED controlled by a GPIO output pin.
+    All timed behaviour is driven by :meth:`update`.
     """
 
     def __init__(self, pin: Pin):
-        """
-        Initialise the ping with its GPIO pin.
-
-        :param pin: Pin instance configured as ``Pin.OUT``
-        """
-        pin.value(0)
         self._pin = pin
+        self._pin.value(0)
+        self._blinking = False
+        self._on_ms = 500
+        self._off_ms = 500
+        self._last_toggle = ticks_ms()
 
-    def on(self):
+    def solid(self):
+        """Turn on and cancel any active blink."""
+        self._blinking = False
         self._pin.value(1)
 
     def off(self):
+        """Turn off and cancel any active blink."""
+        self._blinking = False
         self._pin.value(0)
 
-    def toggle(self):
-        """Toggles the pin signal"""
+    def blink(self, on_ms: int = 400, off_ms: int = 400):
+        """Schedule an indefinite non-blocking blink. 
+        Stopped by :meth:`off` or :meth:`solid`.
+        """
+        self._blinking = True
+        self._on_ms = on_ms
+        self._off_ms = off_ms
+        self._last_toggle = ticks_ms()
+        self._pin.value(1)
+
+    def update(self):
+        """Advance the blink state machine. Call every loop tick."""
+        if not self._blinking:
+            return
+        now = ticks_ms()
+        interval = self._on_ms if self._pin.value() else self._off_ms
+        if ticks_diff(now, self._last_toggle) < interval:
+            return
+        self._last_toggle = now
         self._pin.value(not self._pin.value())
 
-    def blink(self, times: int = 3):
-        current = self._pin.value()
-        for _ in range(times):
-            self.on()
-            sleep_ms(500)
-            self.off()
-            sleep_ms(500)
-        self._pin.value(current)
 
+class CarLights:
+    """
+    Four lights wired as a real car: front-left, front-right,
+    rear-left, rear-right.
+    """
 
-class Lights:
-    def __init__(self, left: Light, right: Light):
-        self._left = left
-        self._right = right
+    def __init__(
+        self, 
+        front_left: Light, 
+        front_right: Light,
+        rear_left: Light, 
+        rear_right: Light
+    ):
+        self.fl = front_left
+        self.fr = front_right
+        self.rl = rear_left
+        self.rr = rear_right
 
-    def on(self):
-        self._left.on()
-        self._right.on()
+    def _all(self):
+        return (self.fl, self.fr, self.rl, self.rr)
 
-    def off(self):
-        self._left.off()
-        self._right.off()
+    def forward(self):
+        """Rear lights solid. Front lights off."""
+        self.fl.off()
+        self.fr.off()
+        self.rl.solid()
+        self.rr.solid()
 
-    def toggle(self):
-        self._left.toggle()
-        self._right.toggle()
+    def reverse(self):
+        """All lights blink — reversing warning."""
+        for light in self._all():
+            light.blink(on_ms=300, off_ms=300)
 
-    def turn_right(self):
-        self._left.on()
-        self._right.blink(5)
+    def indicate_left(self):
+        """Left side blinks, right side off."""
+        self.fl.blink()
+        self.rl.blink()
+        self.fr.off()
+        self.rr.off()
 
-    def turn_left(self):
-        self._left.blink(5)
-        self._right.on()
+    def indicate_right(self):
+        """Right side blinks, left side off."""
+        self.fr.blink()
+        self.rr.blink()
+        self.fl.off()
+        self.rl.off()
 
-    def blink(self, times: int = 3):
-        self._left.blink(times)
-        self._right.blink(times)
+    def party(self):
+        """Blinks all the lights"""
+        self.fr.blink()
+        self.rr.blink()
+        self.fl.blink()
+        self.rl.blink()
+
+    def stop(self):
+        """All lights off."""
+        for light in self._all():
+            light.off()
+
+    def update(self):
+        """Advance all blink state machines. Call every loop tick."""
+        for light in self._all():
+            light.update()
