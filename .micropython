@@ -1,0 +1,5 @@
+# MicroPython project configuration
+PORT=auto
+PORT=auto
+# BAUD is optional - mpremote auto-detects, but can be set for edge cases
+BAUD=115200
